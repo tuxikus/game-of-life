@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	WIN_X                = 1000 // game area
-	WIN_Y                = 600  // game area
+	WIN_X                = 1600 // game area
+	WIN_Y                = 1000 // game area
 	UI_Y                 = 200
-	GRID_TILE_SIZE       = 25
+	GRID_TILE_SIZE       = 20
 	GRID_TILE_LINE_WIDTH = 1
 
 	COLS = WIN_X / GRID_TILE_SIZE
@@ -20,6 +20,7 @@ const (
 const (
 	DEAD  = 0
 	ALIVE = 1
+	NEVER = 3 // state for never touched cells
 )
 
 const (
@@ -30,17 +31,29 @@ const (
 type CellState int
 
 type Cell struct {
-	state CellState
+	state    CellState
+	gensDead int
+}
+
+type Theme struct {
+	bg        rl.Color
+	cell      rl.Color
+	grid      rl.Color
+	lastAlive [4]rl.Color
 }
 
 type Game struct {
-	zoom       float32
-	font       rl.Font
-	speed      int
-	cells      [ROWS][COLS]Cell
-	generation int
-	state      int
-	buttons    []Button
+	zoom                  float32
+	font                  rl.Font
+	speed                 int
+	cells                 [ROWS][COLS]Cell
+	generation            int
+	state                 int
+	buttons               []Button
+	fc                    int // frame counter
+	theme                 Theme
+	lastAliveColorEnabled bool
+	gridEnabled           bool
 }
 
 type Button struct {
@@ -60,10 +73,45 @@ func initalize() {
 	game.state = STOPPED
 	game.font = rl.LoadFont("./font/static/OpenSans-Bold.ttf")
 	game.speed = 60
+	game.fc = 1
+	game.lastAliveColorEnabled = false
+	game.gridEnabled = true
+
+	game.theme = Theme{
+		bg:   rl.White,
+		cell: rl.Black,
+		grid: rl.Black,
+		lastAlive: [4]rl.Color{
+			{
+				R: 102,
+				G: 255,
+				B: 51,
+				A: 150,
+			},
+			{
+				R: 133,
+				G: 214,
+				B: 41,
+				A: 150,
+			},
+			{
+				R: 224,
+				G: 92,
+				B: 10,
+				A: 150,
+			},
+			{
+				R: 255,
+				G: 51,
+				B: 0,
+				A: 150,
+			},
+		},
+	}
 
 	for y := 0; y < ROWS; y++ {
 		for x := 0; x < COLS; x++ {
-			game.cells[y][x] = Cell{state: DEAD}
+			game.cells[y][x] = Cell{state: NEVER}
 		}
 	}
 
@@ -104,10 +152,41 @@ func initalize() {
 			text:       "Next Gen.",
 			action:     nextGeneration,
 		},
+		{
+			pos:        rl.Vector2{X: 500, Y: WIN_Y + 10},
+			size:       rl.Vector2{X: 250, Y: 50},
+			color:      rl.Gray,
+			hoverColor: rl.LightGray,
+			fontColor:  rl.Black,
+			text:       "Last Alive Color",
+			action:     toggleLastAliveColor,
+		},
+		{
+			pos:        rl.Vector2{X: 500, Y: WIN_Y + 10 + 60},
+			size:       rl.Vector2{X: 250, Y: 50},
+			color:      rl.Gray,
+			hoverColor: rl.LightGray,
+			fontColor:  rl.Black,
+			text:       "Grid",
+			action:     toggleGrid,
+		},
 	}
 }
 
+func toggleGrid() {
+	game.gridEnabled = !game.gridEnabled
+}
+
+func toggleLastAliveColor() {
+	game.lastAliveColorEnabled = !game.lastAliveColorEnabled
+}
+
 func increaseSpeed() {
+	if game.speed < 10 {
+		game.speed++
+		return
+	}
+
 	new := game.speed + 10
 
 	if new > 120 {
@@ -120,8 +199,12 @@ func increaseSpeed() {
 func decreaseSpeed() {
 	new := game.speed - 10
 
-	if new < 1 {
-		return
+	if new < 2 {
+		new = game.speed - 1
+
+		if new < 2 {
+			return
+		}
 	}
 
 	game.speed = new
@@ -133,8 +216,8 @@ func spawn() {
 		mousePosX := mousePos.X
 		mousePosY := mousePos.Y
 
-		x := int(mousePosX / GRID_TILE_SIZE)
-		y := int(mousePosY / GRID_TILE_SIZE)
+		x := int(mousePosX / GRID_TILE_SIZE * game.zoom)
+		y := int(mousePosY / GRID_TILE_SIZE * game.zoom)
 
 		if x >= COLS || y >= ROWS {
 			return
@@ -158,19 +241,28 @@ func nextGeneration() {
 
 	for y := 0; y < ROWS; y++ {
 		for x := 0; x < COLS; x++ {
+
 			// rule 1: any live cell with fewer than two live neighbors dies (underpopulation)
 			// rule 2: any live cell with two or three live neighbors lives on to the next generation
 			// rule 3: any live cell with more than three neighbors dies (overpopulation)
 			// rule 4: any dead cell with exactly three live neighbors becomes a live cell (reproduction)
+
+			aboveX := x - 1
+			sameX := x
+			belowX := x + 1
+
+			aboveY := y - 1
+			sameY := y
+			belowY := y + 1
 
 			if x-1 < 0 || y-1 < 0 || x+1 >= COLS || y+1 >= ROWS {
 				continue
 			}
 
 			neighboursAlive := 0
-			for yy := y - 1; yy <= y+1; yy++ {
-				for xx := x - 1; xx <= x+1; xx++ {
-					if xx == x && yy == y {
+			for yy := aboveY; yy <= belowY; yy++ {
+				for xx := aboveX; xx <= belowX; xx++ {
+					if xx == sameX && yy == sameY {
 						continue
 					}
 
@@ -181,13 +273,26 @@ func nextGeneration() {
 			}
 
 			if neighboursAlive < 2 {
-				new[y][x].state = DEAD
+				if new[y][x].state == NEVER {
+					new[y][x].state = NEVER
+				} else {
+					new[y][x].state = DEAD
+				}
 			} else if neighboursAlive == 3 {
 				new[y][x].state = ALIVE
+				new[y][x].gensDead = 0
 			} else if neighboursAlive < 4 {
 				continue
 			} else if neighboursAlive > 3 {
-				new[y][x].state = DEAD
+				if new[y][x].state == NEVER {
+					new[y][x].state = NEVER
+				} else {
+					new[y][x].state = DEAD
+				}
+			}
+
+			if new[y][x].state == DEAD {
+				new[y][x].gensDead++
 			}
 
 		}
@@ -197,26 +302,30 @@ func nextGeneration() {
 	game.cells = new
 }
 
-func processMousewheelInput() {
-	zoom := game.zoom + rl.GetMouseWheelMove()*0.1
+// func processMousewheelInput() {
+//	zoom := game.zoom + rl.GetMouseWheelMove()*0.1
 
-	if zoom > 3 || zoom < 0.5 {
-		return
-	} else {
-		game.zoom = zoom
-	}
+//	if zoom > 3 || zoom < 0.5 {
+//		return
+//	} else {
+//		game.zoom = zoom
+//	}
 
-}
+// }
 
 func drawGrid() {
+	if !game.gridEnabled {
+		return
+	}
+
 	scaledSize := float32(GRID_TILE_SIZE) * float32(game.zoom)
 
 	for x := float32(0); x < float32(WIN_X); x += scaledSize {
-		rl.DrawLineEx(rl.Vector2{X: float32(x), Y: 0}, rl.Vector2{X: float32(x), Y: WIN_Y}, GRID_TILE_LINE_WIDTH, rl.Black)
+		rl.DrawLineEx(rl.Vector2{X: float32(x), Y: 0}, rl.Vector2{X: float32(x), Y: WIN_Y}, GRID_TILE_LINE_WIDTH, game.theme.grid)
 	}
 
 	for y := float32(0); y < float32(WIN_Y); y += scaledSize {
-		rl.DrawLineEx(rl.Vector2{X: 0, Y: float32(y)}, rl.Vector2{X: WIN_X, Y: float32(y)}, GRID_TILE_LINE_WIDTH, rl.Black)
+		rl.DrawLineEx(rl.Vector2{X: 0, Y: float32(y)}, rl.Vector2{X: WIN_X, Y: float32(y)}, GRID_TILE_LINE_WIDTH, game.theme.grid)
 
 	}
 }
@@ -224,8 +333,76 @@ func drawGrid() {
 func drawCells() {
 	for y := 0; y < ROWS; y++ {
 		for x := 0; x < COLS; x++ {
+			if game.cells[y][x].state == DEAD {
+				if game.lastAliveColorEnabled {
+
+					if game.cells[y][x].gensDead < 25 {
+						rl.DrawRectangleV(
+							rl.Vector2{
+								X: float32(float32(x) * GRID_TILE_SIZE * game.zoom),
+								Y: float32(float32(y) * GRID_TILE_SIZE * game.zoom),
+							},
+							rl.Vector2{
+								X: GRID_TILE_SIZE * game.zoom,
+								Y: GRID_TILE_SIZE * game.zoom,
+							},
+							game.theme.lastAlive[0],
+						)
+					} else if game.cells[y][x].gensDead >= 25 && game.cells[y][x].gensDead < 50 {
+						rl.DrawRectangleV(
+							rl.Vector2{
+								X: float32(float32(x) * GRID_TILE_SIZE * game.zoom),
+								Y: float32(float32(y) * GRID_TILE_SIZE * game.zoom),
+							},
+							rl.Vector2{
+								X: GRID_TILE_SIZE * game.zoom,
+								Y: GRID_TILE_SIZE * game.zoom,
+							},
+							game.theme.lastAlive[1],
+						)
+
+					} else if game.cells[y][x].gensDead >= 50 && game.cells[y][x].gensDead < 75 {
+						rl.DrawRectangleV(
+							rl.Vector2{
+								X: float32(float32(x) * GRID_TILE_SIZE * game.zoom),
+								Y: float32(float32(y) * GRID_TILE_SIZE * game.zoom),
+							},
+							rl.Vector2{
+								X: GRID_TILE_SIZE * game.zoom,
+								Y: GRID_TILE_SIZE * game.zoom,
+							},
+							game.theme.lastAlive[2],
+						)
+
+					} else if game.cells[y][x].gensDead >= 75 {
+						rl.DrawRectangleV(
+							rl.Vector2{
+								X: float32(float32(x) * GRID_TILE_SIZE * game.zoom),
+								Y: float32(float32(y) * GRID_TILE_SIZE * game.zoom),
+							},
+							rl.Vector2{
+								X: GRID_TILE_SIZE * game.zoom,
+								Y: GRID_TILE_SIZE * game.zoom,
+							},
+							game.theme.lastAlive[3],
+						)
+
+					}
+				}
+			}
+
 			if game.cells[y][x].state == ALIVE {
-				rl.DrawRectangle(int32(x*GRID_TILE_SIZE), int32(y*GRID_TILE_SIZE), GRID_TILE_SIZE, GRID_TILE_SIZE, rl.Black)
+				rl.DrawRectangleV(
+					rl.Vector2{
+						X: float32(float32(x) * GRID_TILE_SIZE * game.zoom),
+						Y: float32(float32(y) * GRID_TILE_SIZE * game.zoom),
+					},
+					rl.Vector2{
+						X: GRID_TILE_SIZE * game.zoom,
+						Y: GRID_TILE_SIZE * game.zoom,
+					},
+					game.theme.cell,
+				)
 			}
 		}
 	}
@@ -325,6 +502,8 @@ func changeGameState() {
 	case RUNNING:
 		game.state = STOPPED
 	}
+
+	game.fc = 1
 }
 
 func main() {
@@ -334,24 +513,23 @@ func main() {
 	initalize()
 
 	rl.SetTargetFPS(120)
-	fc := 1
 
 	for !rl.WindowShouldClose() {
 
 		if game.state == RUNNING {
-			fc++
+			game.fc++
 		}
 
 		// processMousewheelInput()
 		spawn()
 
-		if fc%game.speed == 0 {
+		if game.fc%game.speed == 0 {
 			processGeneration()
 		}
 
 		rl.BeginDrawing()
 
-		rl.ClearBackground(rl.RayWhite)
+		rl.ClearBackground(game.theme.bg)
 
 		drawCells()
 		drawGrid()
