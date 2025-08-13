@@ -112,7 +112,7 @@ func initalize(options *Options) {
 
 	game.zoom = 1.0
 	game.state = STOPPED
-	game.font = rl.LoadFont("./font/static/OpenSans-Bold.ttf")
+	game.font = rl.LoadFont("./font/OpenSans-Bold.ttf")
 	game.fc = 1
 	game.generation = 0
 
