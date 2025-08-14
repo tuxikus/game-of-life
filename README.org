@@ -2,4 +2,3 @@
 A simple game of life implementation written in go with [[https://github.com/raysan5/raylib][raylib]] [[https://github.com/tuxikus/go-snake][go bindings]].
 
 * GIF
-[[./assets/game-of-life.gif]]
